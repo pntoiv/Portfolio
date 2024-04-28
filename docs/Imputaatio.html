@@ -363,7 +363,8 @@ jolle ei ole vielä käsikirjoitusta eikä lopullisia analyysejä tehty.
 Koodi on osa aineiston valmistelua analyysejä varten. Koodi toimii
 esimerkkinä GPS-datan imputaatiosta eläinten dispersaalin mallintamista
 varten.</p>
-<p>Koodin annotaatio sisältää sekaisin suomea ja englantia.</p>
+<p>Aineisto koostuu yli 30:sta dispersoivasta supikoirasta, jotka on pannoitettu Lapissa.</p>
+<p>Koodin annotaatio sisältää sekaisin suomea ja englantia. Koodia ei ole kaikilta osin annotoitu.</p>
 <p>Koodin on tehnyt kokonaan Pyry Toivonen.</p>
 <pre class="r"><code>## Packages
 library(dplyr)
@@ -514,11 +515,6 @@ RaccList[[j]]$Resampled_lines &lt;- Resampled_lines
 ## Plotting
 library(ggplot2)
 library(cowplot)</code></pre>
-<pre><code>## 
-## Attaching package: &#39;cowplot&#39;</code></pre>
-<pre><code>## The following object is masked from &#39;package:lubridate&#39;:
-## 
-##     stamp</code></pre>
 <pre class="r"><code># Tehdään funktio, jolla lasketaan vuosittaiset kuvat
 plot.RaccList &lt;- function(Year, option, no_col) {
   
@@ -664,41 +660,7 @@ Chosen.list[[i]] &lt;- st_as_sf(Chosen.list[[i]], coords=c(&quot;Longitude&quot;
 Chosen.list[[i]]$NSD &lt;- sqrt(as.vector(st_distance(Chosen.list[[i]])[,1]))
 print(i)
 }</code></pre>
-<pre><code>## [1] 1
-## [1] 2
-## [1] 3
-## [1] 4
-## [1] 5
-## [1] 6
-## [1] 7
-## [1] 8
-## [1] 9
-## [1] 10
-## [1] 11
-## [1] 12
-## [1] 13
-## [1] 14
-## [1] 15
-## [1] 16
-## [1] 17
-## [1] 18
-## [1] 19
-## [1] 20
-## [1] 21
-## [1] 22
-## [1] 23
-## [1] 24
-## [1] 25
-## [1] 26
-## [1] 27
-## [1] 28
-## [1] 29
-## [1] 30
-## [1] 31
-## [1] 32
-## [1] 33
-## [1] 34
-## [1] 35</code></pre>
+
 <pre class="r"><code># Luodaan datataulukko dispersoivista yksilöistä
 Dispersers &lt;- do.call(rbind, Chosen.list)
 
@@ -750,7 +712,6 @@ paikannuksia ei pitäisi olla paljoa.</p>
 <pre class="r"><code>## Imputaatio: Continuous-Time Correlated Random Walk (CTCRW) ##
 
 library(momentuHMM)</code></pre>
-<pre><code>## momentuHMM 1.5.5 (2022-10-18)</code></pre>
 <pre class="r"><code>Dispersers &lt;- st_as_sf(read.csv(&quot;C:/Users/pyry1/Desktop/Työ/UTU - Tutkimusavustaja/2023 työt/Vaellukset/Aineisto/Dispersoivat supikoirat/DispersoivatSupikoirat.csv&quot;), coords=c(&quot;Longitude&quot;,&quot;Latitude&quot;), crs=4326, remove=F) %&gt;%
   st_transform(3067)
 
@@ -830,9 +791,10 @@ AttributeTable &lt;- distinct(st_drop_geometry(select(Dispersers, ID, Sex, Year)
 ImputatedData &lt;- rbind(PredictedDF, MissedPredicted_DF) %&gt;%
   left_join(AttributeTable, by=join_by(ID))
 
+# Valmista ja tallennetaan tulos:
 #write.csv(st_drop_geometry(ImputatedData), &quot;C:/Users/pyry1/Desktop/Työ/UTU - Tutkimusavustaja/2023 työt/Vaellukset/Vaellussuodatus/ImputatedData.csv&quot;, row.names=F)</code></pre>
 
-
+<p><A HREF="./">Palaa portfolion aloitussivulle</A> </p>
 
 
 </div>
