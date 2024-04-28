@@ -1,748 +1,84 @@
 ---
-title: "Applied Biogeography - koodi- ja mallinnusnäyte"
+title: "Portfolio"
 author: "Pyry Toivonen"
-date: "2024-04-19"
-output:
-  html_document: default
-  pdf_document: default
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = "C:/Users/pyry1/Desktop/Kurssit/RMarkdown/Data")
 ```
+
+## GPS-datan imputaationäyte
+
+GPS-datan imputaatiota tarvitaan, kun GPS-aineisto ei ole yhtenäistä (complete) eli sisältää aukkoja paikannusväleissä. 
+
+Erilaiset liikkeiden mallinnustavat (kuten HMM tai iSSF) usein olettavat/vaativat, että aineisto on yhtenäistä. Mutta reaalimaailmassa GPS-paikannus ei ole aina täydellistä, vaan paikannukset joskus myös epäonnisuvat. Tällöin tarvitaan imputaatiota aukkojen paikkaamiseksi.
+
+Olen kirjoittanut koodin keskeneräisen supikoiratutkimuksen GPS-datan imputoimiseksi, jotta voin tehdä analyysejä datalla. Aineisto sisältää 30 dispersoivaa supikoiraa.
+
+```{r}
+#Klikkaa imputaationäytteeseen tästä linkistä.
+```
+
+```{r cars, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(sf)
+library(cowplot)
+
+Dispersers <- st_as_sf(read.csv("DispersoivatSupikoirat.csv"), coords=c("Longitude","Latitude"), crs=4326, remove=F) %>%
+  st_transform(3067)
+
+Imputated <- st_as_sf(read.csv("ImputatedData.csv"), coords=c("x","y"), crs=3067, remove=F) 
+
+TruePoints <- Dispersers %>%
+  filter(ID %in% unique(Imputated$ID))
+
+TruePoints <- split(TruePoints, f=TruePoints$ID)
+
+ImputatedPoints <- split(Imputated, f=Imputated$ID)
+
+plot_list2 <- list()
+
+for (i in 1:length(ImputatedPoints)) { 
+  
+  plot_list2[[i]] <- ggplot() +
+    geom_sf(data=ImputatedPoints[[i]]) +
+    geom_sf(data=TruePoints[[i]], col="red", alpha=0.5) +
+    ggtitle(TruePoints[[i]]$ID) +
+    theme(axis.text = element_blank())
+}
+
+
+```
+```{r}
+plot_grid(plotlist=plot_list2[1:14], ncol=5)
+```
+
+
+## Levinneisyyden mallintaminen dispersaalimalleilla
 
 Koodin konteksti:
 Koodi on osa Turun yliopiston Applied Biogeography -kurssin ryhmätyöprojektia, jossa mallinnetaan Havuparikkaan (sieni, Diploidia sapinea) ja okakaarnakuoriaisen (Ips acuminatus) leviämistä ja levinneisyyttä saaristossa.
 
 Koodissa suoritetaan spatiaalista analyysiä sekä tilastollista mallinnusta spatiaalisesta aineistosta, soveltaen dispersaaliekologian teoriaa ja tilastollisia menetelmiä.
 
-Koodin on kirjoittanut kokonaan Pyry Toivonen
+Olen kirjoittanut koodin kokonaan itse.
 
-
-Alkuvalmisteluja varten käytetään seuraavia paketteja.
-```{r message=FALSE, warning=FALSE}
-library(sf)
-library(ggplot2)
-library(cowplot)
-library(tidyverse)
-```
-
-
-Luodaan aineisto saariryhmille - yhdistetään lähellä toisiaan (max 100 metrin säteellä) olevat saaret saariryhmiksi
-```{r warning=FALSE}
-AOI <- st_read("AOI.shp") # Tuodaan Area of Interest
-
-Meri <- st_read("meri10.shp") # Tuodaan meriaineisto
-Meri <- st_intersection(Meri, AOI) # Leikataan merialue AOI:lla
-
-
-
-# Plotataan ja tarkistetaan
-MeriPlot <- ggplot() +
-  geom_sf(data=AOI, fill=NA) +
-  geom_sf(data=Meri, fill="blue")
-MeriPlot
-
-Meri <- st_union(Meri) # Yhdistetään meriaineiston polygonit yhdeksi isoksi polygoniksi
-Saaret <- st_difference(AOI, Meri) # Invertoidaan meripolygoni, jotta saadaan saaripolygoni
-
-# Plotataan ja tarkistetaan
-SaariPlot <- ggplot() +
-  geom_sf(data=AOI, fill=NA) +
-  geom_sf(data=Saaret, fill="blue")
-SaariPlot
-
-# Allekkain
-plot_grid(MeriPlot, SaariPlot, ncol=1) #ncol = 1 -> kolumnien määrä 1 eli kuvat menee allekkain
-
-# Seuraavaksi luodaan bufferit, joilla yhdistetään max 100 metrin päässä toisitaan olevat saaret saariryhmiksi
-Buffer50 <- st_buffer(Saaret, 50) # 50x2 = korkeintaan 100 m etäisyys saarten välillä
-
-ggplot() +
-  geom_sf(data=Buffer50, fill="red") +
-  geom_sf(data=Saaret, fill="blue")
-
-#st_write(Buffer50, "SaariBuffer50m.shp")
- 
-Bufferit <- st_cast(Buffer50, "POLYGON") # Muutetaan MULTIPOLYGON objekti POLYGON objektiksi. Eli jokainen bufferi on oma polygoninsa.
-
-Saariryhmat <- st_union(Bufferit) # Yhdistetään toisiaan koskettavat polygonit
-
-Saariryhmat <- st_cast(Saariryhmat, "POLYGON") # Muutetaan MULTIPOLYGON objekti POLYGON objektiksi
-Saariryhmat <- st_sf(Saariryhmat) # Muutetaan sfc-objekti sf-objektiksi eli taulukkomuotoon
-Saariryhmat$ID <- 1:nrow(Saariryhmat)
-
-#st_write(Saariryhmat, "Saariryhmat.shp", append=T)
-
-# Tarkastetaan, miltä saariryhmat näyttävät
-ggplot() +
-  geom_sf(data=AOI, fill=NA) +
-  geom_sf(data=Saariryhmat, fill=Saariryhmat$ID)
-
-```
-
-Seuraavaksi käsitellään laikkuaineistoa ja tehdään siitä pistemuotoista analyyseja varten
 ```{r}
-
-Laikut <- st_read("Mortality_polygons_distinct.gpkg") # Tuodaan laikut
-Laikut <- Laikut[!st_is_empty(Laikut),] # Poistetaan tyhjät geometriat
-
-## Muutetaan laikuista pisteet. Tämän olen jo mahdollistanut helposti luomalla centroid.X ja centroid.Y kolumnit
-
-# Ensin tallennetaan kuitenkin tieto polygonien eli laikkujen pinta-alasta
-Laikut$Area_m2 <- as.vector(st_area(Laikut))
-
-# Sitten tehdään pisteaineisto
-Laikkupisteet <- st_as_sf(st_drop_geometry(Laikut), coords=c("centroid.X","centroid.Y"), remove=F)
-
-st_crs(Laikkupisteet) <- 3067 # asetetaan crs
-
-ggplot() +
-  geom_sf(data=Laikkupisteet)
-
-# Sitten yhdistetään pisteet saariryhmiin
-
-Saariryhmat <- Saariryhmat %>%
-  rename(SaarID = ID) # Nimetään ID uudelleen, jotta sen erottaa varmasti
-
-# Liitetään pisteisiin se saariryhmän tunnus (SaarID), jonka sisällä piste on.
-Laikut_joined <- st_join(Laikkupisteet, Saariryhmat, join=st_intersects)
-Laikut_joined$SaarID <- as.factor(Laikut_joined$SaarID)
-
-## Jaetaan laikut harmaisiin ja ruskeisiin laikkuihin
-# Koska laikut on määritetty samasta vuoden 2023 ilmakuvasta, harmaat laikut ovat vanhoja sukupolvia ja ruskeat uusia
-unique(Laikut_joined$Brow.Gray) # Tarkastetaan millä eri tavoin väri on kirjattu
-
-# Yhdistetään nämä eri ilmaistu yhtenäiseksi kolumniksi
-Laikut_gray <- Laikut_joined %>%
-  filter(Brow.Gray %in% c("G","grey","g")) %>%
-  mutate(Generation = "Gray")
-
-Laikut_brown <- Laikut_joined %>%
-  filter(Brow.Gray %in% c("B","brown","b")) %>%
-  mutate(Generation = "Brown")
-
-
-### Seuraavaksi määritetään etäisyysmatriiseja ja etäisyyslukuja niistä ###
-
-# Etäisyysmatriisit
-DistMatrix_Laikut_All <- st_distance(Laikut_joined) # Etäisyysmatriisi kaikille laikuille
-DistMatrix_Laikut_Gen <- st_distance(Laikut_brown, Laikut_gray) # Sukupolvien välinen etäisyys (Brown ja Gray)
-
-## DistMatrix_Laikut_All ##
-# Matriisi sisältää kaikki pisteiden väliset etäisyydet
-DistMatrix_Laikut_All[1:5,1:5] # sample. 
-ncol(DistMatrix_Laikut_All) 
-nrow(DistMatrix_Laikut_All)
-# Rivit ja kolumnit toistavat itseään, joten voidaan käsitellä vain kolumneja tai rivejä
-# Koska apply soveltuu huonosti etäisyysmatriiseihin (laskee mukaan nollan), niin tehdään simppeli for loop.
-MinDist <- 1:ncol(DistMatrix_Laikut_All) # luodaan pohjaksi vektorit
-MeanDist <- 1:ncol(DistMatrix_Laikut_All)
-MeanNetDisp <- 1:ncol(DistMatrix_Laikut_All) # Lasketaan myös mean net squared displacement, joka on tärkeä tunnusluku etäisyyksien tutkimisessa
-
-# Varsinainen for loop
-for (i in 1:ncol(DistMatrix_Laikut_All)) {
-  MinDist[i] <- sort(DistMatrix_Laikut_All[,i])[2] # ignooraa nollan ottamalla toisiksi pienimmän arvon
-  MeanDist[i] <- mean(sort(DistMatrix_Laikut_All[,i][-1]), na.rm=T) # laskee keskiarvon ignooraamalla nollan
-  MeanNetDisp[i] <- mean(sqrt(as.vector(sort(DistMatrix_Laikut_All[,i][-1])))) # laskee Mean net squared displacement ignooramalla nollan
-}
-
-# Liitetään tulokset taulukkoon
-Laikut_joined$MeanDist_m <- MeanDist
-Laikut_joined$MinDist_m <- MinDist
-Laikut_joined$MeanNetDisp_m2 <- MeanNetDisp
-
-
-## DistMatrix_Laikut_Gen ##
-# Matriisi on nyt erilainen, koska luvut eivät toistukaan eli jokainen solu on uniikki
-DistMatrix_Laikut_Gen[1:5,1:5] # sample. 
-ncol(DistMatrix_Laikut_Gen) # 1660 kolumnia = Kolumneissa on Laikut_gray
-nrow(DistMatrix_Laikut_Gen) # 2241 riviä = riveissä on Laikut_brown
-# Nimetään kolumnit ja rivit uudelleen vastaamaan laikkujen ID-arvoja
-colnames(DistMatrix_Laikut_Gen) <- Laikut_gray$ID
-rownames(DistMatrix_Laikut_Gen) <- Laikut_brown$ID
-DistMatrix_Laikut_Gen[1:5,1:5] # tarkastetaan sample uudelleen
-
-# For loopin sijaan tehdään nämä apply-funktiolla vaihtelun vuoksi
-# Kun lasketaan rivien keskiarvot tiedetään kuinka kaukana kyseinen rivi (ruskea laikku) on keskimäärin harmaista laikuista (kolumnit)
-# Sama logiikka pätee minimin kohdalla, mutta lasketaan pienin etäisyys harmaaseen laikkuun jokaiselle riville (ruskealle laikulle)
-# Lasketaan vain ruskeille laikuille etäisyydet, koska ne ovat uudempi sukupolvi
-
-Laikut_brown$MeanDistance_ToGray_m <- apply(DistMatrix_Laikut_Gen, 1, FUN = mean)
-Laikut_brown$MinDistance_ToGray_m <- apply(DistMatrix_Laikut_Gen, 1, FUN = min)
-Laikut_brown$MeanNetDisp_m2 <- apply(DistMatrix_Laikut_Gen, 1, function(x) mean(sqrt(x))) # suoritetaan useampi funktio oikeassa järjestyksessä
-
-
-ggplot() +
-  geom_sf(data=Laikut_brown, aes(col=MeanDistance_ToGray_m)) +
-  ggtitle("Average distance")
-
-ggplot() +
-  geom_sf(data=Laikut_brown, aes(col=MinDistance_ToGray_m)) +
-  ggtitle("Minimum distance")
-
-# Nähdään, että vaikka keskimääräisissä etäisyyksissä on vaihtelua, niin vähemmän vaihtelua on minimietäisyyksissä
-# Eli myös kaukana tiheimmästä alueesta sijaitsevat pisteet ovat lähellä toisia pisteitä
-# Näin usein lajit levittäytyvät sekä harvinaisten pitkien matkojen että yleisempien lyhyiden matkojen yhteistyössä
+#Klikkaa koodi- ja mallinnusnäytteeseen tästä
 ```
 
-
-Seuraavaksi lasketaan, missä pisteiden tiheydet ovat suurimmat eli toisin sanoen millä alueella etäisyydet ovat keskimäärin pienimmät. Tästä pisteestä oletetaan dispersaaliteorian mukaan ilmiön levinneen muuallekin.
-
-Tehdään tämä kahdella tapaa: huomioiden sukupolven (käyttämällä vain ruskeita pisteitä ja niiden etäisyyttä harmaisiin pisteisiin) sekä huomioimatta sitä eli käyttämällä kaikkia pisteitä ja niiden välistä etäisyysverkkoa
 ```{r}
-sort(Laikut_joined$MeanNetDisp_m2)[1:20]
-
-Tiheyskeskus <- Laikut_joined %>%
-  filter(MeanNetDisp_m2 < 127.5) # luku saadaan tarkastelemalla kolumnin arvojakaumaa (valitaan sopiva väli pienimpiä lukuja)
-
-sort(Laikut_brown$MeanNetDisp_m2)[1:20]
-
-# Kutsutaan tätä dispersaalikeskukseksi, koska sukupolvi sisältää ajallisen aspektin: harmaat ovat tulleet aikaisemmin kuin ruskeat. Eli ruskeiden laikkujen etäisyys on laskettu ajallisesti vanhempiin laikkuihin
-Dispersaalikeskus <- Laikut_brown %>%
-  filter(MeanNetDisp_m2 < 120.5)
-
-ggplot() +
-  geom_sf(data=Laikut_joined, aes(col=MeanNetDisp_m2)) +
-  geom_sf(data=Tiheyskeskus, col="red") +
-  geom_sf(data=Dispersaalikeskus, col="green") +
-  ggtitle("Tiheyskeskus (red), Dispersaalikeskus (green)")
-
-# Mäyttää siltä, että tiheyskeskus ja dispersaalikeskus matchaavat jollain tarkkuudella toisiinsa
-# Tämä mielestäni vahvistaa sitä ajatusta, että tiheyskeskus kuvaa hyvin ilmiön levinneisyyden ydinaluetta (myös ajallisesti)
-
-# Lasketaan keskuksille sentroidit
-
-Koordinaatit <- st_coordinates(Tiheyskeskus) # Eristetään keskuksen koordinaatit
-Koordinaatit <- rbind(Koordinaatit, Koordinaatit[1,]) # Suljetaan koordinaattien kehä toistamalla eka koordinaatti myös lopussa
-
-# Luodaan koordinaateista taulukko ja tehdään niistä pistemuotoinen sf-objekti
-keskus <- data.frame(X=mean(Koordinaatit[,1]), Y=mean(Koordinaatit[,2]))
-Tiheyskeskus_centroid <- st_as_sf(keskus, coords=c("X","Y"), crs=st_crs(Tiheyskeskus))
-
-# Toistetaan sama, mutta dispersaalikeskukselle
-Koordinaatit <- st_coordinates(Dispersaalikeskus)
-Koordinaatit <- rbind(Koordinaatit, Koordinaatit[1,])
-
-keskus <- data.frame(X=mean(Koordinaatit[,1]), Y=mean(Koordinaatit[,2]))
-Dispersaalikeskus_centroid <- st_as_sf(keskus, coords=c("X","Y"), crs=st_crs(Dispersaalikeskus))
-
-# Tarkastetaan keskusten sentroidit kartalla
-ggplot() +
-  geom_sf(data=Laikut_joined, aes(col=MeanNetDisp_m2)) +
-  geom_sf(data=Tiheyskeskus, col="red") +
-  geom_sf(data=Tiheyskeskus_centroid, col = "green") +
-  ggtitle("Kaikki laikut")
-ggplot() +
-  geom_sf(data=Laikut_brown, aes(col=MeanNetDisp_m2)) +
-  geom_sf(data=Dispersaalikeskus, col="red") +
-  geom_sf(data=Dispersaalikeskus_centroid, col = "green") +
-  ggtitle("Ruskeat laikut")
-
-```
-
-Seuraavaksi lasketaan tiheys- ja dispersaalikeskusten sentroideista eli keskipisteistä displacement eli kuinka kaukana laikut ovat keskipisteestä
-```{r message=FALSE, warning=FALSE}
-
-# Lasketaan displacement ja luodaan samalla parempi Generation kolumni
-Laikut_joined <- Laikut_joined %>%
-  mutate(Displacement = as.vector(st_distance(Laikut_joined, Tiheyskeskus_centroid))) %>%
-  mutate(Generation = case_when(Brow.Gray %in% c("g","G","gray") ~ "Gray",
-                                Brow.Gray %in% c("b","B","brown") ~ "Brown",
-                                .default = NA))
-
-Laikut_brown <- Laikut_brown %>% 
-  mutate(Displacement = as.vector(st_distance(Laikut_brown, Dispersaalikeskus_centroid)))
-
-## Tarkistetaan minkälaisia jakaumia nämä etäisyysjakaumat ("dispersaalikernelit") noudattaa
-library(fitdistrplus) 
-
-# Näytetään kaksi parhaiten sopivaa jakaumaa testatuista (poistin koodista ne, jotka eivät sopineet yhtä hyvin)
-# Testattu jakaumia norm, lnorm, gamma ja weibull
-par(mar=c(2,2,2,2))
-
-# Kaikki laikut - etäisyys tiheyskeskuksesta
-fitGamma <- fitdist(Laikut_joined$Displacement/1000, "gamma", method="mle")
-plot(fitGamma)
-summary(fitGamma) # AIC 29133.42
-
-fitWeibull <- fitdist(Laikut_joined$Displacement/1000, "weibull", method="mle")
-plot(fitWeibull)
-summary(fitWeibull) # AIC 28939.33 PARAS
-
-# Ruskeat laikut - etäisyys harmaiden laikkujen keskipisteestä
-fitNorm <- fitdist(Laikut_brown$Displacement/1000, "norm", method="mle")
-plot(fitNorm)
-summary(fitNorm) # AIC 15753.91 hitusen parempi, mutta silti heikko osuvuus
-
-fitWeibull <- fitdist(Laikut_brown$Displacement/1000, "weibull", method="mle")
-plot(fitWeibull)
-summary(fitWeibull) # AIC 15755.01 
-
-## TULOS: Mallinnukset kannattaa tehdä kokolaikkuaineistolla, jonka johtopäätöksiä laikut_brown data tukee.
-# Tämä koska: 
-# 1. Laikut_brown raaka-aineistolle ei löydy heti helposti sopivaa jakaumaa
-# 2. Dispersaalikeskus ja tiheyskeskus ovat riittävän lähellä toisiaan
-# Mallinnus vaatii mallin, joka tukee Weibull-jakaumaa (GAMLSS package)
-# https://www.gamlss.com/
-# Data on right-truncated siinä mielessä, että se rajoittuu meidän tutkimusalueeseen ja sen ulkopuolelle mahdollisesti jäävät arvot jäävät rekisteröimättä
-# Tämän right-truncated ominaisuuden voisi huomioida jakaumassa, mutta se on hiukan monimutkaista
-
-# Tallennetaan laikut GeoPackage-muodossa
-#st_write(Laikut_joined, "PINE_laikut.gpkg")
-#st_write(Laikut_brown, "Laikut_brown.gpkg")
-```
-
-Seuraavaksi valmistellaan saaridata mallinnusta varten
-```{r}
-
-# Tuodaan data ja valmistellaan se. Nämä aineistot valmisteltiin yllä, eikä niitä tarvitsisi tuoda uudestaan ellei aloita koodia tästä kohtaan myöhemmin.
-Saariryhmat <- st_read("Saariryhmat.shp")
 Laikut <- st_read("PINE_laikut.gpkg")
-
-Saariryhmat <- Saariryhmat %>%
-  rename(SaarID = ID) # nimetään ID-kolumni uudelleen
-
-## Selvitetään, kuinka monta infektoitunutta/infestoitunutta puuta saarilla on
-# Kun kartoitimme laikkuja, laskimme laikkujen sisällä olevien ruskeiden ja/tai harmaiden puiden määrät. Eli laikkudata sisältää tiedon ruskeiden/harmaiden puiden määrästä
-
-# Poistetaan laikkudatasta NA-arvot, koska riveillä, joissa ei ole tietoa puiden määrästä ei tee mitään.
-Laikut <- Laikut %>%
-     drop_na(No_of_tree) 
-
-# Tehdään subset laikkudatasta, josta on poistettu laikut, jotka on vain yhden puun suuruisia. Nämä eivät ole luotettavia, saattavat olla osa läheisiä muita laikkuja tai ovat todella yksilötapauksia. Eli laikkujen rajaksi asetetaan vähintään 2 puuta. Tätä aineistoa käytetään varsinaisissa malleissa, koska se on varmempi.
-Laikut_1removed <- Laikut %>%
-  filter(No_of_tree > 1)
-
-# Sitten lasketaan saarikohtaisesti infektoituneiden puiden summa. Tehdään tämä huomioiden molemmat ylläolevista tilanteista (yhden puun laikut huomioiden huomioiden ja ne poissulkien)
-TreeCount <- aggregate(No_of_tree ~ SaarID, FUN = "sum", data = Laikut)
-TreeCount_1removed <- aggregate(No_of_tree ~ SaarID, FUN = "sum", data = Laikut_1removed)
-
-TreeCount <- TreeCount %>%
-  rename(Trees = No_of_tree) # nimetään paremmin
-
-TreeCount_1removed <- TreeCount_1removed %>%
-  rename(Trees_1removed = No_of_tree) # nimetään paremmin
-
-# Muutetaan SaarID kaikille samaan faktori-muotoon
-Saariryhmat$SaarID <- as.factor(Saariryhmat$SaarID)
-TreeCount$SaarID <- as.factor(TreeCount$SaarID)
-TreeCount_1removed$SaarID <- as.factor(TreeCount_1removed$SaarID)
-
-# Yhdistetään tiedot puiden summista saariaineistoon
-Saariryhmat <- Saariryhmat %>%
-  left_join(TreeCount) %>%
-  left_join(TreeCount_1removed)
-
-# Muutetaan NA-arvot nolliksi, koska ne johtuvat siitä, että saarella ei ollut puita (0 puuta)
-Saariryhmat[is.na(Saariryhmat)] <- 0 
-
-
-### Lisätään seuraavaksi lisää muuttujia saariaineistoon
-
-# Lasketaan ja lisätään saarten pinta-ala
-Saariryhmat$SaarArea_ha <- as.vector(st_area(Saariryhmat))/10000
-
-
-## Seuraavien muuttujien luomista varten jaetaan saariryhmat laikullisiin ja ei-laikullisiin
-
-# Luodaan subset saaridatasta, joka sisältää vain ei-infektoituneet saaret
-Saaret0 <- Saariryhmat %>%
-  filter(Trees_1removed == 0) # Ei-infektoitunut = infektoituneita puita on 0
-
-# Subset saaridatasta, joka sisältää vain infektoituneet saaret
-Saaret1 <- Saariryhmat %>%
-  filter(Trees_1removed > 1) # pienin arvo jonka infektoituneet saaret saa on 2
-
-
-```
-
-
-Seuraavaksi lasketaan saarten välisiä etäisyyksiä, mutta RMarkdown katkaistaan tässä, koska saarten etäisyyksien laskeminen uudestaan vie liikaa aikaa, joten tuodaan valmis aineisto suoraan R:ään sen sijaan, että pyöritetään koodi uudestaan
-
-Koodi etäisyyslaskelmiin löytyy kuitenkin tästä alta, sitä ei vain ole aktivoitu:
-
-```
-# Lasketaan kuinka kaukana saaret ovat keskimäärin laikullisista saarista
-
-# Etäisyysmatriisi ei-infektoituneiden ja infektoituneiden saarten välillä
-Saarimatriisi0 <- st_distance(Saaret0, Saaret1)
-
-Saarimatriisi0[1:5,1:5]
-ncol(Saarimatriisi0) # kolumnit ovat laikulliset/infektoituneet saaret
-nrow(Saarimatriisi0) # rivit ovat laikuttomat/ei-infektoituneet saaret
-colnames(Saarimatriisi0) <- Saaret1$SaarID
-rownames(Saarimatriisi0) <- Saaret0$SaarID
-
-# Lasketaan laikuttomien saarten keskimääräinen sekä pienin etäisyys laikullisiin saariin. Lisätään omaksi kolumnikseen
-Saaret0$MeanDist_infected_m <- apply(Saarimatriisi0, 1, FUN = mean)
-Saaret0$MinDist_infected_m <- apply(Saarimatriisi0, 1, FUN = min) # 1 = tee funktio riveille
-
-# Etäisyysmatriisi laikullisten/infektoituneiden saarten kesken. Eli etäisyydet toisiinsa, niin sanottu etäisyysverkko.
-Saarimatriisi1 <- st_distance(Saaret1)
-# Luo tuttuun tapaan matriisin, jossa rivit ja kolumnit ovat toistensa toistoa. Sisältää myös etäisyyden itseensä eli nolla-arvoja
-Saarimatriisi1[1:5,1:5]
-
-# Lasketaan laikullisten saarten keskimääräinen etäisyys toisiin laikullisiin saariin sekä etäisyys lähimpään laikulliseen saareen
-Saaret1$MeanDist_infected_m <- apply(Saarimatriisi1, 1, FUN = mean) # Sallitaan 0 keskiarvon laskuun, koska saariryhma voi "infektoida itsensä"
-Saaret1$MinDist_infected_m <- apply(Saarimatriisi1, 1, function(x) min(sort(x)[-1])) # lasketaan minimi ensin poistamalla 0 (sortataan ensin järjestykseen, jolloin 0 on eka luku)
-
-
-
-### Etäisyyslaskelmat loppuu tähän ###
-```
-
-```{r}
-### Palataan koodiin tässä kohtaa, kun skipattiin etäisyyslaskelmien uudelleen pyöritys.
-
-# Luodaan vielä uusi infected kolumni
-Saaret1$Infected <- 1
-Saaret0$Infected <- 0
-
-# Palautetaan takaisin 
-Saariryhmat <- rbind(Saaret1, Saaret0) # yhdistetään takaisin Saariryhmat-taulukoksi
-Saariryhmat <- Saariryhmat[order(Saariryhmat$SaarID),] # järjestetään taulukko loogiseen järjestykseen
-
-# Visualisoidaan tulokset. Punaisella saaret jotka ei ole infektoitu, 
-ggplot() +
-  geom_sf(data=Saariryhmat, aes(fill=as.factor(Infected)))
-
-# Tallennetaan tulos
-#st_write(Saariryhmat, "PINE_saaret.gpkg")
-```
-
-Seuraavaksi siirrytään tilastolliseen mallintamiseen. 
-
-Ensiksi mallinnetaan saaridataa.
-```{r message=FALSE, warning=FALSE}
-
-### Saarten malinnus ###
-
-library(fitdistrplus)
-library(gamlss)
-library(gamlss.tr)
-library(car)
-
 Saaret <- st_read("PINE_saaret.gpkg")
-
-# Poistetaan outlierina liian suuri saari (eli mainland, jonk ID on 380)
-Model1_data <- Saaret %>%
-  filter(!SaarID == "807") # Saariryhmällä 807 on 11085 puuta. 
-
-# Ennen mallinnusta tarkastetaan muuttujien korrelaatioita
-cor(st_drop_geometry(Model1_data[,4:6]))
-# Mikään ei iske silmään ongelmallisena
-
-# Logistinen regressio
-Saaret_model1 <- glm(as.factor(Infected) ~ 
-                       log(SaarArea_ha) +
-                       scale(MeanDist_infected_m) +
-                       scale(MinDist_infected_m),
-                     data=Model1_data,
-                     family=binomial) 
-
-# VIF
-vif(Saaret_model1) # ei ongelmia
-
-summary(Saaret_model1) 
-# Pinta-ala on ainoa merkitsevä tekijä, joka vaikuttaa saaren infektoitumistodennäköisyyteen
-
-# Mallinnetaan infektoituneiden puiden määrää laikullisten saarten välillä
-# Koska selitettävä muuttuja on lukumäärämuuttuja, käytetään negatiivista binomijakaumaa
-# Tehdään ZERO-TRUNCATED NEGATIVE BINOMIAL malli vertailuksi, koska:
-# Datassa on runsaasti nolla-arvoja, jotka johtuu pienistä saarista, joilla ei saata olla infektoitavia puita ollenkaan. Eli nollia saattaa selittää "zero-generating process", jota voi selittää (zero-inflated jakaumat) tai sen voi vain huomioida (zero-truncated).
-# Mutta malli saattaa myös pyörittää nollat ongelmitta (ilman ylidispersiota)
-
-
-# Testataan sopivuus standardiin negatiiviseen binomijakaumaan. Käytetään "Trees_1removed" eli infektoituneiden puiden lukumäärää, joka on saatu aikaan laskemalla suurempien kuin yhden puun laikkujen puumäärät.
-plot(fitdist(Saaret$Trees_1removed, "nbinom"))
-# Nollien suurta määrää lukuunottamatta tuntuu istuvan hyvin.
-
-# Luodaan itse ZERO-TRUNCATED NEG BIN jakauma valmiista NEG BIN (type I) jakaumasta. (TYPE I ja II ei ole tässä asiassa nyt väliä)
-truncated.NBI <- gen.trun(par = 1, family = "NBI", type = "left", name = "ztrunc_NBI")
-
-# Poistetaan Mainland, koska ollaan nyt kiinnostuneita vain saarista. Mainland on valtavan suuri ja olisi mallissa outlier.
-# Muutetaan myös yksiköt toisiinsa sopiviksi ja muutenkin selkeemmiksi
-Model2_data <- Saaret %>%
-  filter(!SaarID == "807") %>%
-  mutate(MeanDist_infected_km = MeanDist_infected_m/1000,
-         MinDist_infected_km = MinDist_infected_m/1000,
-         SaarArea_km2 = SaarArea_ha/100) %>%
-  filter(Trees_1removed > 0) # Poistetaan laikuttomat saaret
-
-Model2_data2 <- Saaret %>%
-  filter(!SaarID == "807") %>%
-  mutate(MeanDist_infected_km = MeanDist_infected_m/1000,
-         MinDist_infected_km = MinDist_infected_m/1000,
-         SaarArea_km2 = SaarArea_ha/100)
-
-
-cor(st_drop_geometry(Model2_data[,2:6])) 
-# Saaren pinta-ala ja puiden määrä melkein täydellisessä korrelaatiossa
-
-
-# Varsinainen malli gamlss() funktiolla
-
-# Malli2.1: Data = nollat mukana, family = NEG BIN
-Saaret_model2.1 <- gamlss(Trees_1removed ~ 
-                            SaarArea_km2 + 
-                            MeanDist_infected_km + 
-                            MinDist_infected_km,
-                          family=NBI,
-                          data=Model2_data2)
-
-# Malli 2.2: Data = nollat poistettu, family = ZERO-TRUNCATED NEG BIN
-Saaret_model2.2 <- gamlss(Trees_1removed ~
-                            SaarArea_km2 +
-                            MeanDist_infected_km +
-                            MinDist_infected_km,
-                          family=truncated.NBI,
-                          data=Model2_data)
-
-
-
-# tarkastetaan mallien residuaalien avulla sopivuutta
-
-par(mar=c(5,5,5,5))
-
-# Malli2.1: Data = nollat mukana, family = standardi Neg Bin
-plot(Saaret_model2.1, residuals = TRUE)
-# Sopivuus näyttää todella hyvältä, mutta yksi outlier jää kummittelemaan. Hyväksymme tämän nyt.
-
-# Malli 2.2: Data = nollat poistettu, family = zero-truncated neg bin
-plot(Saaret_model2.2, residuals = TRUE) 
-# Jakauma vuotaa molemmista päistä, mutta ei ole yhtä suuria outliereita
-
-par(mfrow=c(1,1))
-
-
-# Tarkastetaan parhaan mallin tulos (model 2.3)
-vif(Saaret_model2.1) # ei ongelmaa
-
-summary(Saaret_model2.1) # NEG BIN
-
-## Koitetaan vielä toista tapaa mallintaa: log-normaali malli
-# Tehdään uusi subset datasta, joka sopii ainoastaan laikullisten saarten mallintamiseen
-Infektoidut <- Saaret %>%
-  filter(!SaarID == "807") %>%
-  filter(Infected == 1) %>%
-    mutate(MeanDist_infected_km = MeanDist_infected_m/1000,
-         MinDist_infected_km = MinDist_infected_m/1000,
-         SaarArea_km2 = SaarArea_ha/100)
-
-# Luodaan lukumäärämuuttujan sijaan tiheysmuuttuja, jonka voisi sovittaa log-normaaliin malliin
-# Huomataan, että teoreettinen jakauma sopii hyvin!
-plot(fitdist(log(Infektoidut$Trees_1removed/Infektoidut$SaarArea_km2), "norm"))
-
-
-# Tehdään varsinainen log-normaali malli
-Saaret_model3 <- gamlss(Trees_1removed/SaarArea_km2 ~ 
-                          MeanDist_infected_km + 
-                          MinDist_infected_km,
-                    data=Infektoidut,
-                    family=LOGNO)
-
-# Tarkistetaan mallin sopivuus residuaaleista
-plot(fitdist(Saaret_model3$residuals, "norm")) # residuaalien jakauma sopii myös hyvin
-plot(Saaret_model3, residuals = TRUE)
-
-# Katsotaan VIF ja tulokset
-vif(Saaret_model3)
-summary(Saaret_model3) # ei merkitseviä tuloksia
-
-
-### SAARIMALLIEN TULOKSET ###
-# Pinta-ala oli ainoa tekijä, joka selitti:
-# 1. Saarten invaasiota
-# 2. Invasoitujen saarten laikkujen määrää
-# Log-normaalissa mallissa, jossa vasteena oli tiheys (infektoituneet puut / ha), ei tullut merkitsevästi poikkeavia tuloksia
-
-```
-
-
-Sitten mallinnetaan laikku- eli pistedataa
-```{r message=FALSE, warning=FALSE}
-### Laikkujen mallinnus ###
-
-library(fitdistrplus)
-library(gamlss)
-library(gamlss.tr)
-library(car)
-
-Laikut <- st_read("PINE_laikut.gpkg")
-Saaret <- st_read("PINE_Saaret.gpkg")
-
-## Valmistellaan laikkuaineisto luomalla lisää muuttujia
-
-# Luodaan etäisyysmuuttuja lähimpään rantaviivaan
-
 AOI <- st_read("AOI.shp")
-Meritaso <- st_difference(AOI, st_union(Saaret))
 
 ggplot() +
-  geom_sf(data=Meritaso, fill="blue") +
-  geom_sf(data=Saaret, fill="gray")
-
-Rantaetaisyys <- st_distance(Laikut, Meritaso)
-
-Laikut$MinDistShore_m <- as.vector(Rantaetaisyys)
-
-
-# Luodaan data mallia varten
-LaikkuData <- Laikut %>%
-  left_join(st_drop_geometry(Saaret[,c(1,4,5,6)]), by = join_by(SaarID)) %>% # Yhdistetään saaridatan muuttujia laikkudataan
-  rename(Displacement_km = Displacement,
-         Longitude = centroid.X,
-         Latitude = centroid.Y,
-         LaikkuArea_ha = Area_m2,
-         MinDistShore_km = MinDistShore_m,
-         MeanDist_infected_km = MeanDist_infected_m,
-         MinDist_infected_km = MinDist_infected_m,
-         MeanDist_km = MeanDist_m,
-         MinDist_km = MinDist_m) %>%
-  mutate(Displacement_km = Displacement_km/1000,
-         MinDistShore_km = MinDistShore_km/1000,
-         MeanDist_infected_km = MeanDist_infected_km/1000,
-         MinDist_infected_km = MinDist_infected_km/1000,
-         LaikkuArea_ha = LaikkuArea_ha/10000,
-         MeanDist_km = MeanDist_km/1000,
-         MinDist_km = MinDist_km/1000,
-         SaarArea_km2 = SaarArea_ha/100) %>%
-  st_drop_geometry() %>%
-  filter(No_of_tree > 1) %>%
-  drop_na(SaarArea_km2, Displacement_km) %>%
-  dplyr::select(-No_of_tree, -Brow.Gray, -Generation, -MeanNetDisp_m2)
-
-# Poistetaan turhia kolumneja
-# Tarkistetaan korrelaatiot
-cor(LaikkuData[,c(-1,-5,-10)]) # ei huomioida ei-numeerisia tai epäkiinnostavia kolumneja
-# ei vaikuta olevan ongelmia
-
-## Siirrytään mallintamaan
-
-# Muistutetaan Weibullista, joka oli paras
-fitWeibull <- fitdist(LaikkuData$Displacement_km, "weibull", method="mle")
-plot(fitWeibull)
-summary(fitWeibull) # AIC 25095.57
-
-# Weibull
-LaikkuModel1 <- gamlss(Displacement_km ~
-                         log(SaarArea_km2) +
-                         MinDist_infected_km +
-                         MeanDist_infected_km +
-                         MinDistShore_km +
-                         MinDist_km +
-                         scale(Latitude) +
-                         scale(Longitude),
-                       data = LaikkuData,
-                       family=WEI)
-
-# Generalized gamma
-LaikkuModel2 <- gamlss(Displacement_km ~
-                         log(SaarArea_km2) +
-                         MinDist_infected_km +
-                         MeanDist_infected_km +
-                         MinDistShore_km +
-                         MinDist_km +
-                         scale(Latitude) +
-                         scale(Longitude),
-                       data = LaikkuData,
-                       family=GG,
-                       control = gamlss.control(n.cyc = 250))
-
-# Gumbel
-LaikkuModel3 <- gamlss(Displacement_km ~
-                         log(SaarArea_km2) +
-                         MinDist_infected_km +
-                         MeanDist_infected_km +
-                         MinDistShore_km +
-                         MinDist_km +
-                         scale(Latitude) +
-                         scale(Longitude),
-                       data = LaikkuData,
-                       family=GU)
-
-# Kaikilla malleilla on VIF-ongelma, joka syntyy longitude ja SaarArea korrelaatiosta. Poistetaan siis malleista Longitude epäkiinnostavana muuttujana
-vif(LaikkuModel1)
-vif(LaikkuModel2)
-vif(LaikkuModel3)
-
-# Kaikilla malleilla on VIF-ongelma, joka syntyy longitude ja SaarArea korrelaatiosta. Poistetaan siis malleista Longitude epäkiinnostavana muuttujana
-
-# Weibull
-LaikkuModel1 <- gamlss(Displacement_km ~
-                         log(SaarArea_km2) +
-                         MinDist_infected_km +
-                         MeanDist_infected_km +
-                         MinDistShore_km +
-                         MinDist_km +
-                         scale(Latitude),
-                       data = LaikkuData,
-                       family=WEI,
-                       control = gamlss.control(n.cyc = 100))
-
-# Generalized gamma
-LaikkuModel2 <- gamlss(Displacement_km ~
-                         log(SaarArea_km2) +
-                         MinDist_infected_km +
-                         MeanDist_infected_km +
-                         MinDistShore_km +
-                         MinDist_km +
-                         scale(Latitude),
-                       data = LaikkuData,
-                       family=GG,
-                       control = gamlss.control(n.cyc = 100))
-
-# Gumbel
-LaikkuModel3 <- gamlss(Displacement_km ~
-                         log(SaarArea_km2) +
-                         MinDist_infected_km +
-                         MeanDist_infected_km +
-                         MinDistShore_km +
-                         MinDist_km +
-                         scale(Latitude),
-                       data = LaikkuData,
-                       family=GU)
-
-vif(LaikkuModel1)
-vif(LaikkuModel2)
-vif(LaikkuModel3)
-
-par(mar=c(4,4,4,4))
-plot(LaikkuModel1, residuals = TRUE) # WEIBULL - sopivuus on tyydyttävä
-plot(LaikkuModel2, residuals = TRUE) # GG - hieman WEIBULLIA parempi sopivuus
-plot(LaikkuModel3, residuals = TRUE) # GUMBEL - selkeästi näistä kolmesta epäsopivin
-
-# WEIBULL ja GG jakaumasopivuudet käytännössä identtiset
-# Weibull on "special case of the generalized gamma"
-
-summary(LaikkuModel1) # WEIBULL - AIC: 23932.52
-summary(LaikkuModel2) # GG - AIC pienempi: 23884.96
-# Mallit eroavat merkitsevyyksien suhteen vain Latitude-muuttujan kohdalla
-
-
-### LAIKKUMALLIN TULOKSET ###
-# Merkitsevä vaikutus löytyi muuttujilta:
-# 1. Etäisyys lähimpään laikulliseen saareen (+)
-# 2. Latitude (-)
-# 3. log(Saaren koko) (+)
-# 5. Etäisyys rantaan (+)
-# 6. Keskimääräinen etäisyys muista laikullisista saarista (+)
-# + = lisää etäisyyttä
-# - = vähentää etäisyyttä
-
-# Muistutukseksi saarimallien tulokset:
-
-### SAARIMALLIEN TULOKSET ###
-# Pinta-ala oli ainoa tekijä, joka selitti:
-# 1. Saarten invaasiota
-# 2. Invasoitujen saarten laikkujen määrää
-# Log-normaalissa mallissa, jossa vasteena oli tiheys (infektoituneet puut / ha), ei tullut merkitsevästi poikkeavia tuloksia
-
-
+  geom_sf(data=Saaret, col="gray88", fill="gray88") +
+  geom_sf(data=AOI, col="black", fill=NA, linewidth=2) +
+  geom_sf(data=Laikut, aes(col=MeanNetDisp_m2)) +
+  labs(col="Mean net displacement") +
+  theme_minimal()
+  
 ```
 
-
-
-Tämä koodi ei demonstroi tulosten visualisointia, vaan spatiaalista analyysia sekä tilastollista mallintamista.
