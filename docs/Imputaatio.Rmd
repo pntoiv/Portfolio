@@ -1,0 +1,448 @@
+---
+title: "\"Seek and impute\" - GPS-datan imputaatio"
+author: "Pyry Toivonen"
+date: "2024-04-28"
+output: html_document
+---
+
+Koodin konteksti: koodi on osa keskeneräistä tutkimusartikkelia, jolle ei ole vielä käsikirjoitusta eikä lopullisia analyysejä tehty. Koodi on osa aineiston valmistelua analyysejä varten. Koodi toimii esimerkkinä GPS-datan imputaatiosta eläinten dispersaalin mallintamista varten.
+
+Koodin annotaatio sisältää sekaisin suomea ja englantia.
+
+
+Koodin on tehnyt kokonaan Pyry Toivonen.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+Sys.setlocale("LC_ALL", "sv_SE.UTF-8") ## Recognising Swedish/Finnish accents
+knitr::opts_knit$set(root.dir = "C:/Users/pyry1/Desktop/Työ/UTU - Tutkimusavustaja/Supikoirat/Lappi")
+```
+
+
+```{r message=FALSE, warning=FALSE}
+## Packages
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(sf) 
+library(amt)
+```
+
+
+Koodi, jolla tuodaan R:ään jokainen Lapin supikoira.
+
+```{r}
+# Creating a vector working as a list of folder paths including all the raccoon dogs from different years
+pathlist <- c("2011"="2011/CSV tiedostot",
+              "2012"="2012/CSV tiedostot",
+              "2013"="2013/CSV tiedostot",
+              "2014"="2014/CSV tiedostot",
+              "2015"="2015/CSV tiedostot",
+              "2016"="2016/CSV tiedostot",
+              "2017"="2017/CSV tiedostot",
+              "2018-2022"="2018-2022/CSV tiedostot")
+
+unname(pathlist)
+names(pathlist)
+
+
+RaccList <- list()
+IndividualList <- list()
+
+### Importing all the raccoon dog files (folder path changes for each loop)
+for (j in 1:length(pathlist)) {
+  
+  supilist <-list.files(path = unname(pathlist[j]), pattern=".csv", full.names = TRUE)
+  
+  IDVec <- 1:length(supilist)
+  
+  Individuals <- data.frame(Name = supilist,
+                            ID = IDVec,
+                            Year = names(pathlist[j]))
+  
+  IndividualList[[j]] <- Individuals
+  
+  
+  supi.list <- list() # Empty list
+  
+  ## filling list with dataframes
+  for (i in 1:length(supilist)) { 
+    
+    supi.list[[i]] <- read.csv(supilist[i], sep=";", dec=",")
+    supi.list[[i]]$ID <- c(IDVec[i]) # assigning ID
+    supi.list[[i]] <- dplyr::select(supi.list[[i]], ID, Name, Sex, EventDate, Latitude, Longitude, Month)
+  }
+  
+  
+  ## Merging all the imported raccoon dog files to one data.frame
+  DF_supit <- do.call(rbind, supi.list)
+  
+  DF_supit$Latitude <- as.numeric(DF_supit$Latitude)
+  DF_supit$Longitude <- as.numeric(DF_supit$Longitude)
+  
+  ## Cleaning up the data
+  DF_supit <- DF_supit %>%
+    filter(!is.na(Latitude)) %>%
+    filter(!is.na(Name)) %>%
+    filter(Longitude > 1)
+  
+  
+  # Changing the date column to the same date format that can be read by R. Original dates were in three different formats.
+  DF_supit$EventDate <- parse_date_time(DF_supit$EventDate, orders = c("%m/%d/%Y %H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"))
+  
+  # Removing duplicated rows
+  DF_supit <- DF_supit[!duplicated(DF_supit[,c("EventDate","ID")]),]
+  
+  DF_supit$StudyYear <- names(pathlist[j])
+  
+  RaccList[[names(pathlist[j])]] <- DF_supit
+}
+
+
+# Creating nested data.frame
+RaccList <- lapply(RaccList, function(df) {
+  df %>%
+    nest(.by=ID)
+})
+```
+
+
+Muutetaan aineisto AMT-objekteiksi, jotta voidaan tehdä resamplaus ja valikoida dispersoivat tai vaeltavat supikoirat kaikkien supikoirien joukosta.
+```{r warning=FALSE}
+### Data preparation as AMT-object
+## Converting data to AMT track-object and transforming the coordinates at the same time
+
+
+for (i in 1:length(RaccList)) {
+  RaccList[[i]] <- RaccList[[i]] %>%
+    mutate(trk = lapply(data, function(d) {
+      make_track(d, .x = Longitude, .y = Latitude, .t = EventDate,
+                 crs = st_crs(4326)) %>%
+        amt::transform_coords(st_crs(3067))
+    }))
+  
+}
+
+RaccList[["2011"]] %>% mutate(sr = lapply(trk, summarize_sampling_rate)) %>%
+  dplyr::select(ID, sr) %>% unnest
+
+# Resample each burst (individual) to one point per day for plotting.
+
+for (i in 1:length(RaccList)) {
+  RaccList[[i]] <- RaccList[[i]] %>%
+    mutate(Resampled = lapply(trk, function(x) {
+      x %>% track_resample(rate=days(1), tolerance=hours(4))
+    }))
+  
+}
+
+
+
+### Plotting the individuals for inspection by eye and NSD statistics
+
+# Converting AMT-object to SF-objects and adding some columns
+
+for (j in 1:length(RaccList)) {
+
+Resampled_points <- list()
+Resampled_lines <- list()
+
+for (i in 1:length(RaccList[[j]][["ID"]])) { 
+  
+  Resampled_points[[i]] <- as_sf_points(RaccList[[j]][["Resampled"]][[i]][,1:3])
+  Resampled_points[[i]]$ID <- as.character(i)
+  Resampled_lines[[i]] <- as_sf_lines(RaccList[[j]][["Resampled"]][[i]][,1:3])
+  Resampled_lines[[i]]$ID <- as.character(i)
+  Resampled_points[[i]]$NSD <- sqrt(as.vector(st_distance(Resampled_points[[i]])[,1]))
+  }
+
+RaccList[[j]]$Resampled_points <- Resampled_points
+RaccList[[j]]$Resampled_lines <- Resampled_lines
+
+}
+
+
+## Plotting
+library(ggplot2)
+library(cowplot)
+
+# Tehdään funktio, jolla lasketaan vuosittaiset kuvat
+plot.RaccList <- function(Year, option, no_col) {
+  
+  if (option == "Simple") {
+    # Code to execute for option 1
+    print("Plotting simple resampled trajectories")
+    
+    plot_list <- list()
+    
+    for (i in 1:length(RaccList[[Year]][["ID"]])) { 
+      
+      plot_list[[i]] <- ggplot() +
+        geom_sf(data=RaccList[[Year]][["Resampled_lines"]][[i]]) +
+        geom_sf(data=RaccList[[Year]][["Resampled_points"]][[i]]) +
+        ggtitle(RaccList[[Year]][["Resampled_lines"]][[i]]$ID)
+      
+      
+    }
+    
+    plot_grid(plotlist=plot_list, ncol=no_col)
+    
+  } else if (option == "NSD traj") {
+    
+    print("Plotting resampled trajectories with NSD")
+    
+    plot_list <- list()
+    
+    for (i in 1:length(RaccList[[Year]][["ID"]])) { 
+      
+      plot_list[[i]] <- ggplot() +
+        geom_sf(data=RaccList[[Year]][["Resampled_lines"]][[i]]) +
+        geom_sf(data=RaccList[[Year]][["Resampled_points"]][[i]], aes(col=NSD)) +
+        ggtitle(RaccList[[Year]][["Resampled_lines"]][[i]]$ID)
+      
+      
+    }
+    
+    plot_grid(plotlist=plot_list, ncol=no_col)
+
+    
+  } else if (option == "NSD graph") {
+    
+    print("Plotting NSD graphs")
+    
+    plot_list <- list()
+    
+    for (i in 1:length(RaccList[[Year]][["ID"]])) { 
+    plot_list[[i]] <- ggplot(data=RaccList[[Year]][["Resampled_points"]][[i]], aes(x=t_, y=NSD)) +
+      geom_line() +
+      geom_point() +
+      ggtitle(RaccList[[Year]][["Resampled_points"]][[i]]$ID) +
+      xlab("Time") +
+      ylab("NSD (m2)")
+    
+    }
+
+    plot_grid(plotlist=plot_list, ncol=no_col)
+    
+  } else {
+    # Code to handle invalid option
+    stop("Invalid option. Please choose 'Simple', 'NSD traj', or 'NSD graph'.")
+  }
+  
+  
+}
+
+
+# funktiolla voi valita vuoden, ja kuvatyylin (Simple, NSD traj tai NSD graph). no_col määrää, kuinka monta kolumnia tulee kuvaan
+plot.RaccList("2014", "NSD graph", 4)
+
+plot.RaccList("2014", "Simple", 4)
+
+
+
+## Merkitään dispersoivat yksilöt kahdella tavalla: karttaplottausten (geomSF) ja NSD grafiikoiden (NSD) avulla ##
+# Perustuvat funktion plot.RaccList() silmämääräiseen tarkkailuun
+
+Individuals <- do.call(rbind, IndividualList)
+Individuals$Disp_geomSF <- NA
+Individuals$Disp_NSD <- NA
+
+# Karttakuvien perusteella tehty arvio
+Individuals$Disp_geomSF <-
+  c(1,0,1,0,0,
+    0,1,0,0,
+    0,1,1,1,0,1,1,0,1,
+    1,1,0,0,1,1,1,1,1,
+    1,1,0,0,0,1,1,1,1,1,
+    1,1,0,1,0,
+    0,0,1,1,1,
+    0,0,1,1,0,0,1,0,1,1,1,1,1,0,1)
+
+# NSD grafiikoiden perusteella tehty arvio
+Individuals$Disp_NSD <-
+  c(1,0,1,0,0,
+    0,0,0,0,
+    1,1,1,1,1,1,1,1,1,
+    0,1,1,1,1,1,1,1,1,
+    1,1,0,0,1,1,1,1,1,1,
+    0,1,0,1,1,
+    0,1,1,1,1,
+    0,0,1,1,1,0,1,0,1,1,1,1,1,0,1)
+
+# Luodaan kolumni, joka laskee minkä yksilöiden kohdalla arviot ovat samaa mieltä
+Individuals <- Individuals %>%
+  mutate(Disp_Agree = case_when(Disp_geomSF == 1 & Disp_NSD == 1 ~ 1,
+                                .default = 0))
+  
+sum(Individuals$Disp_Agree) # 34 dispersoivaa yksilöä
+
+
+#Valitaan nämä yksilöt samaan taulukkoon
+ChosenIndividuals <- Individuals %>%
+  filter(Disp_Agree == 1) 
+
+ChosenIndividuals$ID <- 100+1:nrow(ChosenIndividuals)
+
+# Tuodaan yksilöt for loopin avulla. Samalla muokataan dataa ja siivotaan sitä
+Chosen.list <- list()
+
+for (i in 1:nrow(ChosenIndividuals)) {
+
+Chosen.list[[i]] <- read.csv(ChosenIndividuals[i,1], sep=";", dec=",")
+Chosen.list[[i]]$ID <- ChosenIndividuals[i,2] # assigning ID
+Chosen.list[[i]]$Year <- ChosenIndividuals[i,3]
+Chosen.list[[i]] <- dplyr::select(Chosen.list[[i]], ID, Name, Sex, Year, EventDate, Latitude, Longitude, Month)
+
+# cleaning up
+Chosen.list[[i]] <- Chosen.list[[i]] %>%
+  filter(!is.na(Latitude)) %>%
+  filter(!is.na(Name)) %>%
+  filter(Longitude > 1)
+
+
+# Changing the date column to the same date format that can be read by R. Original dates were in three different formats.
+Chosen.list[[i]]$EventDate <- parse_date_time(Chosen.list[[i]]$EventDate, orders = c("%m/%d/%Y %H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"))
+
+# Removing duplicated rows
+Chosen.list[[i]] <- Chosen.list[[i]][!duplicated(Chosen.list[[i]][,"EventDate"]),]
+
+
+Chosen.list[[i]] <- st_as_sf(Chosen.list[[i]], coords=c("Longitude","Latitude"), crs=4326, remove=F) %>%
+  st_transform(3067)
+Chosen.list[[i]]$NSD <- sqrt(as.vector(st_distance(Chosen.list[[i]])[,1]))
+print(i)
+}
+
+
+# Luodaan datataulukko dispersoivista yksilöistä
+Dispersers <- do.call(rbind, Chosen.list)
+
+
+# Tarkastellaan yksilöitä plottaamalla: NSD-grafiikat
+{plot_list <- list()
+
+for (i in 1:length(Chosen.list)) { 
+  plot_list[[i]] <- ggplot(data=Chosen.list[[i]], aes(x=EventDate, y=NSD)) +
+    geom_line() +
+    geom_point() +
+    ggtitle(Chosen.list[[i]]$ID) +
+    xlab("Time") +
+    ylab("NSD (m2)")
+  
+}
+}
+
+plot_grid(plotlist=plot_list[1:10], ncol=5) # 109 on ennemminkin lyhyt migraatio
+plot_grid(plotlist=plot_list[11:20], ncol=5)
+plot_grid(plotlist=plot_list[21:34], ncol=5) # 134 on migraatio
+
+
+# Tarkastellaan yksilöitä plottaamalla: karttakuvat
+{plot_list <- list()
+  
+  for (i in 1:length(Chosen.list)) { 
+    plot_list[[i]] <- ggplot() +
+      geom_sf(data=Chosen.list[[i]]) +
+      ggtitle(Chosen.list[[i]]$ID)
+    
+    
+  }
+}
+
+plot_grid(plotlist=plot_list[1:10], ncol=5) # 109 on ennemminkin lyhyt migraatio
+plot_grid(plotlist=plot_list[11:20], ncol=5)
+plot_grid(plotlist=plot_list[21:34], ncol=5) # 134 on migraatio
+
+
+#write.csv(st_drop_geometry(Dispersers), "C:/Users/pyry1/Desktop/Työ/UTU - Tutkimusavustaja/2023 työt/Vaellukset/Vaellussuodatus/DispersoivatSupikoirat.csv", row.names=F)
+```
+
+
+Sitten suoritetaan imputaatio eli, jotta aineistoa voidaan analysoida 3-tunnin aikavälillä, täytyy imputaatiolla varmistaa, että data on yhtenäistä (complete) eikä sisällä aukkoja. Imputaatio toteutetaan ennustamalla puuttuvat paikannukset mallintamalla. Puuttuvia paikannuksia ei pitäisi olla paljoa.
+
+```{r warning=FALSE}
+
+
+## Imputaatio: Continuous-Time Correlated Random Walk (CTCRW) ##
+
+library(momentuHMM)
+
+Dispersers <- st_as_sf(read.csv("C:/Users/pyry1/Desktop/Työ/UTU - Tutkimusavustaja/2023 työt/Vaellukset/Aineisto/Dispersoivat supikoirat/DispersoivatSupikoirat.csv"), coords=c("Longitude","Latitude"), crs=4326, remove=F) %>%
+  st_transform(3067)
+
+Dispersers$EventDate <- as.POSIXct(Dispersers$EventDate, tz="GMT", format="%Y-%m-%d %H:%M:%S")
+
+TrainData <- Dispersers %>%
+  select(ID, EventDate)
+
+dcrawl <- crawlWrap(TrainData, Time.name="EventDate", timeStep="3 hours")
+
+#saveRDS(dcrawl, "C:/Users/pyry1/Desktop/Työ/UTU - Tutkimusavustaja/2023 työt/Vaellukset/Crawl_models/North_Crawl_29tracks.rds")
+
+PredictedData <- prepData(data=dcrawl)
+
+# Tehdään subset datasta, josta poistetaan päiväsajan paikannukset
+hour_of_day <- hour(PredictedData$EventDate)
+
+PredictedData <- PredictedData[!(hour_of_day >= 7 & hour_of_day <= 19),]
+
+PredictedDF <- st_as_sf(select(PredictedData, ID, EventDate, x, y), coords=c("x","y"), crs=3067, remove=F)
+
+PredictedPoints <- split(PredictedDF, f=PredictedDF$ID)
+
+# Plotataan
+TruePoints <- Dispersers %>%
+  filter(ID %in% unique(PredictedData$ID))
+
+TruePoints <- split(TruePoints, f=TruePoints$ID)
+
+plot_list2 <- list()
+
+for (i in 1:length(PredictedPoints)) { 
+  
+  plot_list2[[i]] <- ggplot() +
+    geom_sf(data=PredictedPoints[[i]]) +
+    geom_sf(data=TruePoints[[i]], col="red", alpha=0.5) +
+    ggtitle(TruePoints[[i]]$ID)
+}
+
+plot_grid(plotlist=plot_list2[1:14], ncol=5)
+plot_grid(plotlist=plot_list2[15:30], ncol=5)
+
+# Punaisella näkyy aidot paikannukset ja mustalla ennustetut paikannukset.
+
+# Huomataan, että imputaation tulos vaikuttaa lupaavalta.
+# crawlWrap paketti prepData() luo objektin, joka sisältää askeleet ja kulmat
+
+
+## Katsotaan mitkä jäivät ennustamatta (imputoimatta) ja yritetään niitä uudelleen
+
+Missed <- Dispersers %>%
+  filter(!ID %in% unique(PredictedData$ID))
+
+MissedTrainData <- Missed %>%
+  select(ID, EventDate)
+
+dcrawl2 <- crawlWrap(MissedTrainData, Time.name="EventDate", timeStep="3 hours")
+
+Missed_Predicted <- prepData(dcrawl2)
+
+hour_of_day <- hour(Missed_Predicted$EventDate)
+
+Missed_Predicted <- Missed_Predicted[!(hour_of_day >= 7 & hour_of_day <= 19),]
+
+MissedPredicted_DF <- st_as_sf(select(Missed_Predicted, ID, EventDate, x, y), coords=c("x","y"), crs=3067, remove=F)
+
+Dispersers$ID <- as.factor(Dispersers$ID)
+AttributeTable <- distinct(st_drop_geometry(select(Dispersers, ID, Sex, Year)))
+
+ImputatedData <- rbind(PredictedDF, MissedPredicted_DF) %>%
+  left_join(AttributeTable, by=join_by(ID))
+
+#write.csv(st_drop_geometry(ImputatedData), "C:/Users/pyry1/Desktop/Työ/UTU - Tutkimusavustaja/2023 työt/Vaellukset/Vaellussuodatus/ImputatedData.csv", row.names=F)
+
+
+
+```
+

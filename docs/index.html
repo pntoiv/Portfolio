@@ -357,12 +357,13 @@ mallinnusnäyte</h1>
 
 </div>
 
+<p> Alla olevasta linkistä löydät koodinäytteen GPS-datan imputaatiosta dispersaalin mallintamista varten
+<A HREF="./Imputaatio.html">Imputaationäye</A> </p>
 
 <p>Koodin konteksti: Koodi on osa Turun yliopiston Applied Biogeography
 -kurssin ryhmätyöprojektia, jossa mallinnetaan Havuparikkaan (sieni,
 Diploidia sapinea) ja okakaarnakuoriaisen (Ips acuminatus) leviämistä ja
 levinneisyyttä saaristossa.</p>
-<p> Testi </p>
 <p>Koodissa suoritetaan spatiaalista analyysiä sekä tilastollista
 mallinnusta spatiaalisesta aineistosta, soveltaen dispersaaliekologian
 teoriaa ja tilastollisia menetelmiä.</p>
@@ -922,6 +923,7 @@ vif(Saaret_model1) # ei ongelmia</code></pre>
 # Tehdään ONE-TRUNCATED NEGATIVE BINOMIAL malli vertailuksi, koska:
 # Datassa on runsaasti nolla-arvoja, jotka johtuu pienistä saarista, joilla ei saata olla infektoitavia puita ollenkaan. Eli nollia saattaa selittää &quot;zero-generating process&quot;, jota voi selittää (zero-inflated jakaumat) tai sen voi vain huomioida (zero-truncated).
 # Mutta malli saattaa myös pyörittää nollat ongelmitta (ilman ylidispersiota)
+# ONE-truncated, koska datasta poistetaan ne saaret, joissa on vain yksi infektoitunut puu
 
 
 # Testataan sopivuus standardiin negatiiviseen binomijakaumaan. Käytetään &quot;Trees_1removed&quot; eli infektoituneiden puiden lukumäärää, joka on saatu aikaan laskemalla suurempien kuin yhden puun laikkujen puumäärät.
